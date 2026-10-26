@@ -752,6 +752,7 @@ openssl rand -hex 24      # INTERNAL_API_TOKEN
 - Нет полноценного двойного ledger (debit/credit entries); для реального финтеха нужна бухгалтерская модель с проводками и сверкой.
 - Интеграционный тест покрывает PostgreSQL/ACID, но сквозной сценарий с настоящим Redis в CI пока не запускается.
 - Ключи карт хранятся в environment; production — KMS/HSM + ротация.
+- Локальный compose публикует PostgreSQL/Redis на host и не включает Redis AUTH/TLS — это удобно для отладки, но недопустимо в production.
 - HTTP-клиент между сервисами не использует mTLS.
 - Нет OpenTelemetry/tracing и централизованного audit-log.
 
