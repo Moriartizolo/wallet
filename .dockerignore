@@ -1,0 +1,12 @@
+.tools/
+.env
+.git/
+.github/
+.idea/
+.vscode/
+bin/
+coverage.out
+*.log
+notifications.log
+README.md
+docs/

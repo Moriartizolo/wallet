@@ -1,0 +1,11 @@
+.git/
+.tools/
+.env
+bin/
+coverage.out
+*.log
+notifications.log
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

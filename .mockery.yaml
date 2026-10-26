@@ -1,0 +1,11 @@
+with-expecter: true
+dir: internal/wallet/mocks
+outpkg: mocks
+filename: "mock_{{.InterfaceName | snakecase}}.go"
+packages:
+  github.com/securewallet/securewallet/internal/wallet/service:
+    interfaces:
+      Repository:
+      BalanceCache:
+      NotificationPublisher:
+      CardCipher:

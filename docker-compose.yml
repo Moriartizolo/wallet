@@ -1,0 +1,156 @@
+name: securewallet
+
+x-app: &app
+  image: securewallet:${IMAGE_TAG:-local}
+  build:
+    context: .
+    target: runtime
+  restart: unless-stopped
+  networks:
+    - securewallet
+  security_opt:
+    - no-new-privileges:true
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m
+  stop_grace_period: 15s
+
+x-auth-environment: &auth-environment
+  HTTP_ADDR: ":8081"
+  DATABASE_URL: "${AUTH_DATABASE_URL:-postgres://securewallet:securewallet@postgres:5432/securewallet_auth?sslmode=disable}"
+  REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+  JWT_SECRET: "${JWT_SECRET:-dev-only-jwt-secret-change-me-0123456789}"
+  JWT_ISSUER: "${JWT_ISSUER:-securewallet-auth}"
+  JWT_TTL: "${JWT_TTL:-1h}"
+  INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:-dev-only-internal-token-change-me-123456}"
+  LOG_LEVEL: "${LOG_LEVEL:-info}"
+  AUTO_MIGRATE: "false"
+
+x-wallet-environment: &wallet-environment
+  HTTP_ADDR: ":8082"
+  DATABASE_URL: "${WALLET_DATABASE_URL:-postgres://securewallet:securewallet@postgres:5432/securewallet_wallet?sslmode=disable}"
+  REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+  AUTH_SERVICE_URL: "${AUTH_SERVICE_URL:-http://auth-service:8081}"
+  AUTH_SERVICE_TIMEOUT: "${AUTH_SERVICE_TIMEOUT:-3s}"
+  INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN:-dev-only-internal-token-change-me-123456}"
+  CARD_ENCRYPTION_KEY: "${CARD_ENCRYPTION_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}"
+  CARD_FINGERPRINT_KEY: "${CARD_FINGERPRINT_KEY:-ZmVkY2JhOTg3NjU0MzIxMGZlZGNiYTk4NzY1NDMyMTA=}"
+  BALANCE_CACHE_TTL: "${BALANCE_CACHE_TTL:-5m}"
+  NOTIFICATIONS_FILE: "/var/lib/securewallet/notifications.log"
+  NOTIFICATION_BUFFER: "${NOTIFICATION_BUFFER:-1024}"
+  LOG_LEVEL: "${LOG_LEVEL:-info}"
+  AUTO_MIGRATE: "false"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks:
+      - securewallet
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-securewallet}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-securewallet}"
+      POSTGRES_DB: "${POSTGRES_DB:-securewallet_auth}"
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/postgres/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    networks:
+      - securewallet
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["/app/migrate"]
+    environment:
+      LOG_LEVEL: "${LOG_LEVEL:-info}"
+      AUTH_DATABASE_URL: "${AUTH_DATABASE_URL:-postgres://securewallet:securewallet@postgres:5432/securewallet_auth?sslmode=disable}"
+      WALLET_DATABASE_URL: "${WALLET_DATABASE_URL:-postgres://securewallet:securewallet@postgres:5432/securewallet_wallet?sslmode=disable}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  notifications-init:
+    image: alpine:3.21
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    command: ["sh", "-c", "chown -R 10001:10001 /var/lib/securewallet"]
+    volumes:
+      - notifications-data:/var/lib/securewallet
+
+  auth-service:
+    <<: *app
+    command: ["/app/auth"]
+    environment:
+      <<: *auth-environment
+    ports:
+      - "${AUTH_HTTP_PORT:-8081}:8081"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8081/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  wallet-service:
+    <<: *app
+    command: ["/app/wallet"]
+    environment:
+      <<: *wallet-environment
+    ports:
+      - "${WALLET_HTTP_PORT:-8082}:8082"
+    volumes:
+      - notifications-data:/var/lib/securewallet
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      notifications-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8082/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  postgres-data:
+  redis-data:
+  notifications-data:
+
+networks:
+  securewallet:
+    driver: bridge
